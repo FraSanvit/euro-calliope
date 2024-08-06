@@ -2,30 +2,26 @@
 
 
 rule download_transport_timeseries:
-    # TODO have correct timeseries data once RAMP has generated the new charging profile and it's been put on Zenodo
     message: "Get EV data from RAMP"
     params:
-        url = config["data-sources"]["ev-data"]
+        url = config["data-sources"]["controlled-ev-profiles"]
     conda: "../envs/shell.yaml"
-    output: protected("data/automatic/ramp-ev-consumption-profiles.csv.gz")
+    output:
+        protected("data/automatic/ramp-ev-{dataset}.csv.gz")
+    wildcard_constraints:
+        dataset = "consumption-profiles|plugin-profiles"
     localrule: True
     shell: "curl -sSLo {output} {params.url}"
 
-
-rule jrc_idees_transport_processed:
-    message: "Process {wildcards.dataset} transport data from JRC-IDEES to be used in understanding current and future transport demand"
-    input:
-        data = expand(
-            "build/data/jrc-idees/transport/unprocessed/{country_code}.xlsx",
-            country_code=JRC_IDEES_SCOPE
-        )
-    output: "build/data/jrc-idees/transport/processed-{dataset}.csv"
+rule download_uncontrolled_timeseries:
+    # TODO: move into rule download_transport_timeseries once PR 356 is merged
+    message: "Get EV uncontrolled charging data from RAMP"
     params:
-        vehicle_type_names = config["parameters"]["transport"]["vehicle-type-names"],
-    wildcard_constraints:
-        dataset = "road-energy|road-distance|road-vehicles"
-    conda: "../envs/default.yaml"
-    script: "../scripts/transport/jrc_idees.py"
+        url = config["data-sources"]["uncontrolled-ev-profiles"]
+    conda: "../envs/shell.yaml"
+    output: protected("data/automatic/ramp-ev-uncontrolled-charging-profiles.csv.gz")
+    localrule: True
+    shell: "curl -sSLo {output} {params.url}"
 
 
 rule annual_transport_demand:
@@ -45,16 +41,20 @@ rule annual_transport_demand:
         road_distance_historically_electrified = "build/data/transport/annual-road-transport-distance-demand-historic-electrification.csv",
     script: "../scripts/transport/annual_transport_demand.py"
 
-rule create_controlled_road_transport_annual_demand:
-    message: "Create annual demand for controlled charging at {wildcards.resolution} resolution"
+rule create_controlled_road_transport_annual_demand_and_installed_capacities:
+    message: "Create annual demand for controlled charging and corresponding charging potentials at {wildcards.resolution} resolution"
     input:
         annual_controlled_demand = "build/data/transport/annual-road-transport-distance-demand-controlled.csv",
-        locations = "build/data/regional/units.csv",
-        populations = "build/data/regional/population.csv",
+        ev_vehicle_number = "build/data/jrc-idees/transport/processed-road-vehicles.csv",
+        jrc_road_distance = "build/data/jrc-idees/transport/processed-road-distance.csv",
+        locations = "build/data/{resolution}/units.csv",
+        populations = "build/data/{resolution}/population.csv",
     params:
         first_year = config["scope"]["temporal"]["first-year"],
         final_year = config["scope"]["temporal"]["final-year"],
         power_scaling_factor = config["scaling-factors"]["power"],
+        transport_scaling_factor = config["scaling-factors"]["transport"],
+        battery_sizes = config["parameters"]["transport"]["ev-battery-sizes"],
         conversion_factors = config["parameters"]["transport"]["road-transport-conversion-factors"],
         countries = config["scope"]["spatial"]["countries"],
         country_neighbour_dict = config["data-pre-processing"]["fill-missing-values"]["ramp"],
@@ -63,12 +63,29 @@ rule create_controlled_road_transport_annual_demand:
         main = "build/data/{resolution}/demand/electrified-transport.csv",
     script: "../scripts/transport/road_transport_controlled_charging.py"
 
+rule create_controlled_ev_charging_parameters:
+    message: "Create timeseries parameters {wildcards.dataset_name} for controlled EV charging at {wildcards.resolution} resolution"
+    input:
+        ev_profiles = lambda wildcards: "data/automatic/ramp-ev-consumption-profiles.csv.gz" if "demand" in wildcards.dataset_name else f"data/automatic/ramp-ev-{wildcards.dataset_name}.csv.gz",
+        locations = "build/data/{resolution}/units.csv",
+        populations = "build/data/{resolution}/population.csv",
+    params:
+        demand_range = config["parameters"]["transport"]["monthly-demand-bound-fraction"],
+        first_year = config["scope"]["temporal"]["first-year"],
+        final_year = config["scope"]["temporal"]["final-year"],
+        country_neighbour_dict = config["data-pre-processing"]["fill-missing-values"]["ramp"],
+        countries = config["scope"]["spatial"]["countries"],
+    wildcard_constraints:
+        dataset_name = "demand-shape-equals|demand-shape-max|demand-shape-min|plugin-profiles"
+    conda: "../envs/default.yaml"
+    output: "build/models/{resolution}/timeseries/demand/{dataset_name}-ev.csv"
+    script: "../scripts/transport/road_transport_controlled_constraints.py"
 
 rule create_uncontrolled_road_transport_timeseries:
     message: "Create timeseries for road transport demand  (uncontrolled charging)"
     input:
         annual_data = "build/data/transport/annual-road-transport-distance-demand-uncontrolled.csv",
-        timeseries = "data/automatic/ramp-ev-consumption-profiles.csv.gz"
+        timeseries = "data/automatic/ramp-ev-uncontrolled-charging-profiles.csv.gz"
     params:
         first_year = config["scope"]["temporal"]["first-year"],
         final_year = config["scope"]["temporal"]["final-year"],
@@ -89,7 +106,7 @@ use rule create_uncontrolled_road_transport_timeseries as create_uncontrolled_ro
     message: "Create timeseries for historic electrified road transport demand (uncontrolled charging)"
     input:
         annual_data = "build/data/transport/annual-road-transport-distance-demand-historic-electrification.csv",
-        timeseries = "data/automatic/ramp-ev-consumption-profiles.csv.gz",
+        timeseries = "data/automatic/ramp-ev-uncontrolled-charging-profiles.csv.gz",
     params:
         first_year = config["scope"]["temporal"]["first-year"],
         final_year = config["scope"]["temporal"]["final-year"],
@@ -109,8 +126,8 @@ rule aggregate_timeseries: # TODO consider merge with other rules, as this is ti
             f'build/data/transport/timeseries/timeseries-uncontrolled-{vehicle_type}.csv'
             for vehicle_type in config["parameters"]["transport"]["road-transport-conversion-factors"].keys()
         ],
-        locations = "build/data/regional/units.csv",
-        populations = "build/data/regional/population.csv"
+        locations = "build/data/{resolution}/units.csv",
+        populations = "build/data/{resolution}/population.csv"
     conda: "../envs/default.yaml"
     output:
         "build/models/{resolution}/timeseries/demand/uncontrolled-electrified-road-transport.csv",
@@ -124,7 +141,7 @@ use rule aggregate_timeseries as aggregate_timeseries_historic_electrified with:
             "build/data/transport/timeseries/timeseries-uncontrolled-light-duty-vehicles-historic-electrification.csv",
             "build/data/transport/timeseries/timeseries-uncontrolled-coaches-and-buses-historic-electrification.csv",
             "build/data/transport/timeseries/timeseries-uncontrolled-passenger-cars-historic-electrification.csv"),
-        locations = "build/data/regional/units.csv",
-        populations = "build/data/regional/population.csv"
+        locations = "build/data/{resolution}/units.csv",
+        populations = "build/data/{resolution}/population.csv"
     output:
         "build/models/{resolution}/timeseries/demand/uncontrolled-road-transport-historic-electrification.csv"

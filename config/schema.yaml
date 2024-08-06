@@ -65,8 +65,8 @@ properties:
                 description: Web address of load data.
             nuts:
                 type: string
-                pattern: ^(https?|http?):\/\/.+
-                description: Web address of geospatial NUTS data.
+                pattern: ^(https?|http?):\/\/.+{nuts_year}.*
+                description: Web address of geospatial NUTS data. Must contain a {nuts_year} placeholder.
             potentials:
                 type: string
                 pattern: ^(https?|http?):\/\/.+
@@ -103,10 +103,37 @@ properties:
                 type: string
                 pattern: ^(https?|http?):\/\/.+
                 description: Web address of Swiss industry energy balance data.
-            ev-data:
+            controlled-ev-profiles:
                 type: string
                 pattern: ^(https?|http?):\/\/.+
-                description: Web address of electric vehicle data.
+                description: Web address of electric vehicle data for controlled charging.
+            uncontrolled-ev-profiles:
+                type: string
+                pattern: ^(https?|http?):\/\/.+
+                description: Web address of electric light-duty vehicle uncontrolled charging.
+            gridded-weather-data:
+                type: string
+                pattern: ^(https?|http?):\/\/.+{data_var}.*\.(nc)$
+                description: "Web address of gridded weather data. Expecting a netCDF file with the coordinates [time, site], the variables [{data_var}, lat, lon], and the attribute 'unit'."
+            when2heat-params:
+                type: string
+                pattern: ^(https?|http?):\/\/.+
+                description: "Web address of When2Heat parameters for heat demand profiles."
+            population:
+                type: string
+                pattern: ^(https?|http?):\/\/.+
+                description: "Web address of population data."
+            heat-pump-characteristics:
+                type: string
+                pattern: ^(https?|http?):\/\/.*\.(nc)$
+                description: >
+                    Web address of manufacturer heat pump characteristic dataset.
+                    Expected dimensions are:
+                    - source (intended source of ambient temperature of the heat pump - air or ground)
+                    - product (names of manufacturer products)
+                    - sink_temp (sink temperature in degrees C)
+                    - source_temp (source temperature in degrees C)
+                    - data_type (characteristics of the heat pumps, e.g. COP, Heating capacity)
     data-pre-processing:
         type: object
         description: Parameters for the pre-processing of raw data.
@@ -178,6 +205,9 @@ properties:
             monetary:
                 type: number
                 description: "Applied to all quantities of monetary cost (base: EUR)."
+            transport:
+                type: number
+                description: "Applied to all quantities of transport (base: Mio km)."
     parameters:
         type: object
         description: Parameter values of the models.
@@ -348,9 +378,43 @@ properties:
                             motorcycles:
                                 type: string
                                 description: JRC-IDEES name of motorcycles.
+                    ev-battery-sizes:
+                        type: object
+                        description: EV battery size per vehicle type in MWh.
+                        additionalProperties: false
+                        properties:
+                            light-duty-vehicles:
+                                type: number
+                                description: Light duty vehicles / trucks.
+                            heavy-duty-vehicles:
+                                type: number
+                                description: Heavy duty vehicles / trucks.
+                            coaches-and-buses:
+                                type: number
+                                description: Coaches and buses.
+                            passenger-cars:
+                                type: number
+                                description: Passenger cars.
+                            motorcycles:
+                                type: number
+                                description: Motorcylces.
                     uncontrolled-ev-charging-share:
                         type: number
                         description: Share of uncontrolled charging.
+                    monthly-demand-bound-fraction:
+                        type: object
+                        description: Charging flexibility parameter constraining the amount of monthly demand to be met.
+                        additionalProperties: false
+                        properties:
+                            min:
+                                type: number
+                                description: Minimum monthly demand range.
+                            max:
+                                type: number
+                                description: Maximum monthly demand range.
+                            equals:
+                                type: number
+                                description: Equal monthly demand range.
             entsoe-tyndp:
                 type: object
                 description: Parameters to define scenario choice for data accessed from the ENTSO-E ten-year network development plan 2020. For more information, see https://2020.entsos-tyndp-scenarios.eu/
@@ -380,92 +444,199 @@ properties:
                 type: string
                 description: Nuclear technology capacity scenario. "current" will use today's capacities based on the JRC power plant database (PPDB). All other scenario names should point to a configuration CSV file specifying minimum and maximum capacities per country in MW with non-zero capacities (columns=[country, min, max]).
                 pattern: ^(current)|(\w+.csv)$
+            nuts-year:
+                description: Version of the Nomenclature of Territorial Units for Statistics to use in creating spatial units (see https://ec.europa.eu/eurostat/web/nuts/history for more info).
+                type: number
+                enum: [2006, 2010, 2013, 2016]
             heat:
                 type: object
                 description: Parameters for heat sector model.
                 additionalProperties: false
                 properties:
-                    space_heat:
+                    tech-efficiencies:
                         type: object
-                        description: Parameters of space heating technologies.
+                        additionalProperties: false
+                        description: Heat technology efficiencies by heating end use.
+                        properties:
+                            space_heat:
+                                type: object
+                                description: Parameters of space heating technologies.
+                                additionalProperties: false
+                                properties:
+                                    gas-eff:
+                                        type: number
+                                        description: Gas boiler efficiency.
+                                    oil-eff:
+                                        type: number
+                                        description: Oil boiler efficiency.
+                                    solid-fossil-eff:
+                                        type: number
+                                        description: Solid fossil boiler efficiency.
+                                    biofuel-eff:
+                                        type: number
+                                        description: Biofuel boiler efficiency.
+                                    solar-thermal-eff:
+                                        type: number
+                                        description: Solar thermal efficiency.
+                                    electricity-eff:
+                                        type: number
+                                        description: Electric heater efficiency.
+                            hot_water:
+                                type: object
+                                description: Parameters of water heating technologies.
+                                additionalProperties: false
+                                properties:
+                                    gas-eff:
+                                        type: number
+                                        description: Gas boiler efficiency.
+                                    oil-eff:
+                                        type: number
+                                        description: Oil boiler efficiency.
+                                    solid-fossil-eff:
+                                        type: number
+                                        description: Solid fossil boiler efficiency.
+                                    biofuel-eff:
+                                        type: number
+                                        description: Biofuel boiler efficiency.
+                                    solar-thermal-eff:
+                                        type: number
+                                        description: Solar thermal efficiency.
+                                    electricity-eff:
+                                        type: number
+                                        description: Electric heater efficiency.
+                            cooking:
+                                type: object
+                                description: Parameters of cooking technologies.
+                                additionalProperties: false
+                                properties:
+                                    gas-eff:
+                                        type: number
+                                        description: Gas stove efficiency.
+                                    oil-eff:
+                                        type: number
+                                        description: Oil stove efficiency.
+                                    solid-fossil-eff:
+                                        type: number
+                                        description: Solid fossil stove efficiency.
+                                    biofuel-eff:
+                                        type: number
+                                        description: Biofuel stove efficiency.
+                                    electricity-eff:
+                                        type: number
+                                        description: Electric stove efficiency.
+                    sfh-mfh-shares:
+                        type: object
+                        description: |
+                            Share of single-family to multi-family households which will be used to aggregate household heat demand profiles.
+                            Shares must add to 1.
                         additionalProperties: false
                         properties:
-                            carnot-performance:
+                            MFH:
                                 type: number
-                                description: Carnot performance.
-                            gas-eff:
+                                description: Fraction of multi-family households
+                                minimum: 0
+                                maximum: 1
+                            SFH:
                                 type: number
-                                description: Gas boiler efficiency.
-                            oil-eff:
-                                type: number
-                                description: Oil boiler efficiency.
-                            solid-fossil-eff:
-                                type: number
-                                description: Solid fossil boiler efficiency.
-                            biofuel-eff:
-                                type: number
-                                description: Biofuel boiler efficiency.
-                            solar-thermal-eff:
-                                type: number
-                                description: Solar thermal efficiency.
-                            electricity-eff:
-                                type: number
-                                description: Electric heater efficiency.
-                            space-heat-temp:
-                                type: number
-                                description: Space heating temperature.
-                            hp-cop:
-                                type: number
-                                description: Heat pump coefficient of performance.
-                    water_heat:
+                                description: Fraction of single-family households
+                                minimum: 0
+                                maximum: 1
+                    electrification-shares:
                         type: object
-                        description: Parameters of water heating technologies.
+                        description: |
+                            Share of electricity-powered technologies available to meet heat demand, used when producing an electrified heat demand profile.
+                            Shares must add to 1.
                         additionalProperties: false
                         properties:
-                            gas-eff:
-                                type: number
-                                description: Gas boiler efficiency.
-                            oil-eff:
-                                type: number
-                                description: Oil boiler efficiency.
-                            solid-fossil-eff:
-                                type: number
-                                description: Solid fossil boiler efficiency.
-                            biofuel-eff:
-                                type: number
-                                description: Biofuel boiler efficiency.
-                            solar-thermal-eff:
-                                type: number
-                                description: Solar thermal efficiency.
-                            electricity-eff:
-                                type: number
-                                description: Electric heater efficiency.
-                            water-heat-temp:
-                                type: number
-                                description: Water heating temperature.
-                            hp-cop:
-                                type: number
-                                description: Heat pump coefficient of performance.
-                    cooking:
+                            space_heat:
+                                type: object
+                                description: Electrification shares of space heating technologies.
+                                additionalProperties: false
+                                properties:
+                                    heat-pump:
+                                        type: number
+                                        description: share of heat pumps.
+                                        minimum: 0
+                                        maximum: 1
+                                    direct:
+                                        type: number
+                                        description: share of direct electric heating.
+                                        minimum: 0
+                                        maximum: 1
+                            hot_water:
+                                type: object
+                                description: Electrification shares of water heating technologies.
+                                additionalProperties: false
+                                properties:
+                                    heat-pump:
+                                        type: number
+                                        description: share of heat pumps.
+                                        minimum: 0
+                                        maximum: 1
+                                    direct:
+                                        type: number
+                                        description: share of direct electric heating.
+                                        minimum: 0
+                                        maximum: 1
+
+            heat-pump:
+                type: object
+                description: Parameters to define heat pump operating characteristics
+                additionalProperties: false
+                properties:
+                    sink-temperature:
                         type: object
-                        description: Parameters of cooking technologies.
+                        description: Assumed running temperature (degrees C) of different heating methods.
                         additionalProperties: false
                         properties:
-                            gas-eff:
+                            underfloor:
+                                type: integer
+                                description: Underfloor heating.
+                            radiator-large:
+                                type: integer
+                                description: Large radiators (usually installed alongside heat pumps during retrofit).
+                            radiator-conventional:
+                                type: integer
+                                description: Conventional radiators (usually installed alongside gas boilers).
+                            hot-water:
+                                type: integer
+                                description: Hot water temperature (not space heating).
+                    space-heat-sink-shares:
+                        type: object
+                        description: Share of building stock assumed to have different space heating methods
+                        additionalProperties: false
+                        properties:
+                            underfloor:
                                 type: number
-                                description: Gas stove efficiency.
-                            oil-eff:
+                                description: Underfloor heating.
+                            radiator-large:
                                 type: number
-                                description: Oil stove efficiency.
-                            solid-fossil-eff:
+                                description: Large radiators (usually installed alongside heat pumps during retrofit).
+                            radiator-conventional:
                                 type: number
-                                description: Solid fossil stove efficiency.
-                            biofuel-eff:
+                                description: Conventional radiators (usually installed alongside gas boilers).
+                    heat-pump-shares:
+                        type: object
+                        description: >-
+                            Market share of air- vs ground-source heat pumps, which will be used to create a generic "heat pump" technology.
+                            Must sum to 1.
+                        additionalProperties: false
+                        properties:
+                            ashp:
                                 type: number
-                                description: Biofuel stove efficiency.
-                            electricity-eff:
+                                description: Air-source heat pump
+                                minimum: 0
+                                maximum: 1
+                            gshp:
                                 type: number
-                                description: Electric stove efficiency.
+                                description: Ground-source heat pump
+                                minimum: 0
+                                maximum: 1
+                    correction-factor:
+                        type: number
+                        minimum: 0
+                        maximum: 1
+                        description: Correction factor to go from manufacturer data on heat pump performance to 'real' system performance.
     scope:
         type: object
         description: Spatial and temporal scope bounding the models.
@@ -624,7 +795,11 @@ properties:
                 description: Set the lower threshold of per-region land area covered by gridcells containing capacity factor timeseries data. Not all land area is covered by data because there are sometimes small islands linked to a region which are missed by the onshore wind / PV datasets. These islands are usually very small, consitituting less than 0.01% of a region.
                 minimum: 0
                 maximum: 1
-
+            shared-coast-polygon-area-share-threshold:
+                type: number
+                description: Set the fraction of a Euro-Calliope unit's area below which a component of the unit can be ignored (e.g. small islands) when assigning Exclusive Economic Zones to subnational Euro-Calliope units.
+                minimum: 0
+                maximum: 1
     capacity-factors:
         type: object
         description: Parameters related to average or time-dependent capacity factors of renewables.
@@ -683,10 +858,12 @@ properties:
                         type: string
                         description: Region code
     shapes:
-        description: Source for geospatial shapes of all locations. The config must be consistent with data from https://doi.org/10.5281/zenodo.3244985.
+        description: >-
+            Source for the lowest-level spatial units of all locations.
+            The config must be consistent with data from https://zenodo.org/records/6600619.
         type: object
         propertyNames:
-            enum: [continental, national, regional]
+            enum: [continental, national, regional, ehighways]
         additionalProperties: false
         patternProperties:
             ^[a-zA-Z]+.*$:

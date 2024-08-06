@@ -9,9 +9,7 @@ import yaml
 
 
 def run_test(snakemake):
-    with open(
-        os.path.join(snakemake.input.test_dir, "..", "resources", "test.yaml")
-    ) as f:
+    with open(os.path.join(snakemake.input.test_resources_dir, "test.yaml")) as f:
         test_config = yaml.safe_load(f)
 
     override_dict = test_config["test-model"]["overrides"][
@@ -28,6 +26,7 @@ def run_test(snakemake):
             f"--html={snakemake.log[0]}",
             "--self-contained-html",
             "--verbose",
+            *snakemake.params.test_args,
         ],
         plugins=[
             _create_config_plugin(snakemake, override_dict, scenarios, subset_time)
@@ -124,6 +123,28 @@ def _create_config_plugin(snakemake, override_dict, scenarios, subset_time):
             ]
             assert len(selected) == 1
             return selected[0]
+
+        @pytest.fixture(scope="module")
+        def cop_timeseries(self):
+            return pd.read_csv(snakemake.input.cop, index_col=0, parse_dates=True)
+
+        @pytest.fixture(scope="module")
+        def heat_demand(self):
+            return pd.read_csv(
+                snakemake.input.heat_demand, index_col=0, parse_dates=True
+            )
+
+        @pytest.fixture(scope="module")
+        def historic_electrified_heat(self):
+            return pd.read_csv(
+                snakemake.input.historic_electrified_heat, index_col=0, parse_dates=True
+            )
+
+        @pytest.fixture(scope="module")
+        def electrified_heat_demand(self):
+            return pd.read_csv(
+                snakemake.input.electrified_heat_demand, index_col=0, parse_dates=True
+            )
 
     return SnakemakeConfigPlugin()
 

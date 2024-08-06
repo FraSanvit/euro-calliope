@@ -1,13 +1,11 @@
 """Rules related to biofuels."""
 
-localrules: download_biofuel_potentials_and_costs
-
-
 rule download_biofuel_potentials_and_costs:
     message: "Download raw biofuel potential and cost data."
     params: url = config["data-sources"]["biofuel-potentials-and-costs"]
     output: protected("data/automatic/raw-biofuel-potentials-and-costs.xlsx")
     conda: "../envs/shell.yaml"
+    localrule: True
     shell: "curl -sSLo {output} '{params.url}'"
 
 
@@ -53,17 +51,19 @@ rule biofuels:
     script: "../scripts/biofuels/allocate.py"
 
 
-rule bio_techs_and_locations_template:
-    message: "Create biofuel tech definition file from template."
+rule biofuel_tech_module:
+    message: "Create {wildcards.tech_module} tech definition file from template."
     input:
-        template = techs_template_dir + "supply/biofuel.yaml",
+        template = techs_template_dir + "supply/{tech_module}.yaml.jinja",
         biofuel_cost = "build/data/regional/biofuel/{scenario}/costs-eur-per-mwh.csv".format(
             scenario=config["parameters"]["jrc-biofuel"]["scenario"]
         ),
         locations = "build/data/{{resolution}}/biofuel/{scenario}/potential-mwh-per-year.csv".format(scenario=config["parameters"]["jrc-biofuel"]["scenario"])
     params:
-        biofuel_efficiency = config["parameters"]["biofuel-efficiency"],
         scaling_factors = config["scaling-factors"],
+        biofuel_efficiency = config["parameters"]["biofuel-efficiency"]
     conda: "../envs/default.yaml"
-    output: "build/models/{resolution}/techs/supply/biofuel.yaml"
+    output: "build/models/{resolution}/techs/supply/{tech_module}.yaml"
+    wildcard_constraints:
+        tech_module = "biofuel|electrified-biofuel"
     script: "../scripts/biofuels/template_bio.py"

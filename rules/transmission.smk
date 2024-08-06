@@ -1,13 +1,12 @@
 """Rules to generate electricity transmission lines between regions."""
 
-localrules: download_entsoe_tyndp_zip, entsoe_tyndp_xlsx
-
 
 rule download_entsoe_tyndp_zip:
     message: "Download ENTSO-E ten-year network development plan (TYNDP) 2020 scenario dataset"
     params: url = config["data-sources"]["entsoe-tyndp"]
     output: protected("data/automatic/raw-entsoe-tyndp.xlsx.zip")
     conda: "../envs/shell.yaml"
+    localrule: True
     shell: "curl -sSLo {output} '{params.url}'"
 
 
@@ -17,14 +16,15 @@ rule entsoe_tyndp_xlsx:
     shadow: "minimal"
     output: "build/data/national/TYNDP-2020-Scenario-Datafile.xlsx",
     conda: "../envs/shell.yaml"
+    localrule: True
     shell: "unzip -o {input} 'TYNDP-2020-Scenario-Datafile.xlsx' -d build/data/national"
 
 
-rule transmission_entsoe_tyndp_template:
+rule transmission_entsoe_tyndp_tech_module:
     message: "Create YAML file of national-scale links with ENTSO-E TYNDP net-transfer capacities"
     input:
-        template = techs_template_dir + "transmission/electricity-transmission.yaml",
-        locations = rules.locations_template.output.csv,
+        template = techs_template_dir + "transmission/electricity-transmission.yaml.jinja",
+        locations = rules.locations_module.output.csv,
         entsoe_tyndp = rules.entsoe_tyndp_xlsx.output[0]
     params:
         scenario = config["parameters"]["entsoe-tyndp"]["scenario"],
@@ -39,10 +39,10 @@ rule transmission_entsoe_tyndp_template:
     script: "../scripts/transmission/template_transmission_entsoe_tyndp.py"
 
 
-rule link_locations_with_transmission_techs_template:
+rule transmission_linked_neighbours_tech_module:
     message: "Link {wildcards.resolution} direct neighbours and neighbours with sea connections with transmission techs from template."
     input:
-        template = techs_template_dir + "transmission/electricity-transmission.yaml",
+        template = techs_template_dir + "transmission/electricity-transmission.yaml.jinja",
         units = rules.units.output[0]
     params:
         scaling_factors = config["scaling-factors"],

@@ -10,12 +10,14 @@ root_dir = config["root-directory"] + "/" if config["root-directory"] not in [""
 __version__ = open(f"{root_dir}VERSION").readlines()[0].strip()
 test_dir = f"{root_dir}tests/"
 model_test_dir = f"{test_dir}model"
+resources_test_dir = f"{test_dir}resources"
 template_dir = f"{root_dir}templates/"
 model_template_dir = f"{template_dir}models/"
 techs_template_dir = f"{model_template_dir}techs/"
 
 include: "./rules/shapes.smk"
 include: "./rules/data.smk"
+include: "./rules/jrc-idees.smk"
 include: "./rules/wind-and-solar.smk"
 include: "./rules/biofuels.smk"
 include: "./rules/hydro.smk"
@@ -25,14 +27,13 @@ include: "./rules/nuclear.smk"
 include: "./rules/transport.smk"
 include: "./rules/sync.smk"
 include: "./rules/heat.smk"
-min_version("7.8")
+include: "./rules/modules.smk"
+min_version("8.10")
 localrules: all, clean
 wildcard_constraints:
-        resolution = "continental|national|regional"
-
-ruleorder: area_to_capacity_limits > hydro_capacities > biofuels > nuclear_regional_capacity > dummy_tech_locations_template
-ruleorder: bio_techs_and_locations_template > techs_and_locations_template
-ruleorder: create_controlled_road_transport_annual_demand > dummy_tech_locations_template
+    resolution = "continental|national|regional|ehighways",
+    group_and_tech = "(demand|storage|supply|transmission)\/\w+"
+ruleorder: module_with_location_specific_data > module_without_location_specific_data
 
 ALL_CF_TECHNOLOGIES = [
     "wind-onshore", "wind-offshore", "open-field-pv",
@@ -42,15 +43,16 @@ ALL_CF_TECHNOLOGIES = [
 
 
 def ensure_lib_folder_is_linked():
-    if not workflow.conda_prefix:
+    if not (hasattr(workflow, "deployment_settings") and not
+            hasattr(workflow.deployment_settings, "conda_prefix")):
         return
-    link = Path(workflow.conda_prefix) / "lib"
+    link = Path(workflow.deployment_settings.conda_prefix) / "lib"
     if not link.exists():
         # Link either does not exist or is an invalid symlink
         print("Creating link from conda env dir to eurocalliopelib.")
         if link.is_symlink():  # Deal with existing but invalid symlink
             shell(f"rm {link}")
-        makedirs(workflow.conda_prefix)
+        makedirs(workflow.deployment_settings.conda_prefix)
         shell(f"ln -s {workflow.basedir}/lib {link}")
 
 
@@ -68,66 +70,56 @@ onerror:
 
 rule all:
     message: "Generate euro-calliope pre-built models and run tests."
+    localrule: True
+    default_target: True
     input:
         "build/logs/continental/test.success",
         "build/logs/national/test.success",
-        "build/models/continental/example-model.yaml",
-        "build/models/national/example-model.yaml",
-        "build/models/regional/example-model.yaml",
-        "build/models/continental/build-metadata.yaml",
-        "build/models/national/build-metadata.yaml",
-        "build/models/regional/build-metadata.yaml",
-        "build/models/regional/summary-of-potentials.nc",
-        "build/models/regional/summary-of-potentials.csv",
-        "build/models/national/summary-of-potentials.nc",
-        "build/models/national/summary-of-potentials.csv",
-        "build/models/continental/summary-of-potentials.nc",
-        "build/models/continental/summary-of-potentials.csv"
-
+        expand(
+            "build/models/{resolution}/{file}",
+            resolution=["continental", "national", "regional", "ehighways"],
+            file=["example-model.yaml", "build-metadata.yaml", "summary-of-potentials.nc", "summary-of-potentials.csv"]
+        )
 
 rule all_tests:
     message: "Generate euro-calliope pre-built models and run all tests."
     input:
-        "build/models/continental/example-model.yaml",
-        "build/models/national/example-model.yaml",
-        "build/models/regional/example-model.yaml",
-        "build/logs/continental/test.success",
-        "build/logs/national/test.success",
-        "build/logs/regional/test.success",
-        "build/models/build-metadata.yaml",
-        "build/models/regional/summary-of-potentials.nc",
-        "build/models/regional/summary-of-potentials.csv",
-        "build/models/national/summary-of-potentials.nc",
-        "build/models/national/summary-of-potentials.csv",
-        "build/models/continental/summary-of-potentials.nc",
-        "build/models/continental/summary-of-potentials.csv"
+        expand(
+            "build/logs/{resolution}/test.success",
+            resolution=["continental", "national", "regional", "ehighways"],
+        ),
+        expand(
+            "build/models/{resolution}/{file}",
+            resolution=["continental", "national", "regional", "ehighways"],
+            file=["example-model.yaml", "build-metadata.yaml", "summary-of-potentials.nc", "summary-of-potentials.csv"]
+        )
 
 
-rule dummy_tech_locations_template:  # needed to provide `techs_and_locations_template` with a locational CSV linked to each technology that has no location-specific data to define.
-    message: "Create empty {wildcards.resolution} location-specific data file for the {wildcards.tech_group} tech `{wildcards.tech}`."  # Update ruleorder at the top of the file if you instead want the techs_and_locations_template rule to be used to generate a file
-    input: rules.locations_template.output.csv
-    output: "build/data/{resolution}/{tech_group}/{tech}.csv"
-    conda: "envs/shell.yaml"
-    shell: "cp {input} {output}"
-
-
-rule techs_and_locations_template:
-    message: "Create {wildcards.resolution} definition file for the {wildcards.tech_group} tech `{wildcards.tech}`."
+rule module_with_location_specific_data:
+    message: "Create {wildcards.resolution} definition file for {wildcards.group_and_tech}."
     input:
-        template = techs_template_dir + "{tech_group}/{tech}.yaml",
-        locations = "build/data/{resolution}/{tech_group}/{tech}.csv"
+        template = techs_template_dir + "{group_and_tech}.yaml.jinja",
+        locations = "build/data/{resolution}/{group_and_tech}.csv"
     params:
         scaling_factors = config["scaling-factors"],
         capacity_factors = config["capacity-factors"]["average"],
-        max_power_densities = config["parameters"]["maximum-installable-power-density"]
+        max_power_densities = config["parameters"]["maximum-installable-power-density"],
+        heat_pump_shares = config["parameters"]["heat-pump"]["heat-pump-shares"],
+        biofuel_efficiency = config["parameters"]["biofuel-efficiency"],
     wildcard_constraints:
-        tech_group = "(?!transmission).*"  # i.e. all but transmission
+        # Exclude all outputs that have their own `techs_and_locations_template` implementation
+        group_and_tech = "(?!transmission\/|supply\/biofuel|supply\/electrified-biofuel).*"
     conda: "envs/default.yaml"
-    output: "build/models/{resolution}/techs/{tech_group}/{tech}.yaml"
+    output: "build/models/{resolution}/techs/{group_and_tech}.yaml"
     script: "scripts/template_techs.py"
 
+use rule module_with_location_specific_data as module_without_location_specific_data with:
+    # For all cases where we don't have any location-specific data that we want to supply to the template
+    input:
+        template = techs_template_dir + "{group_and_tech}.yaml.jinja",
+        locations = rules.locations_module.output.csv
 
-rule no_params_model_template:
+rule module_without_specific_data:
     message: "Create {wildcards.resolution} configuration files from templates where no parameterisation is required."
     input:
         template = model_template_dir + "{template}",
@@ -138,8 +130,8 @@ rule no_params_model_template:
     shell: "cp {input.template} {output}"
 
 
-rule no_params_template:
-    message: "Create non-model files from templates where no parameterisation is required."
+rule auxiliary_files:
+    message: "Create auxiliary output files (i.e. those not used to define a Calliope model) from templates where no parameterisation is required."
     input:
         template = template_dir + "{template}",
     output: "build/models/{template}"
@@ -149,24 +141,22 @@ rule no_params_template:
     shell: "cp {input.template} {output}"
 
 
-rule model_template:
+rule model:
     message: "Generate top-level {wildcards.resolution} model configuration file from template"
     input:
-        template = model_template_dir + "example-model.yaml",
-        non_model_files = expand(
+        template = model_template_dir + "example-model.yaml.jinja",
+        auxiliary_files = expand(
             "build/models/{template}", template=["environment.yaml", "README.md"]
         ),
-        input_files = expand(
-            "build/models/{{resolution}}/{input_file}",
-            input_file=[
+        modules = expand(
+            "build/models/{{resolution}}/{module}",
+            module=[
                 "interest-rate.yaml",
                 "locations.yaml",
                 "techs/demand/electricity.yaml",
                 "techs/demand/electrified-transport.yaml",
-                "techs/demand/electrified-heat.yaml",
                 "techs/storage/electricity.yaml",
                 "techs/storage/hydro.yaml",
-                "techs/supply/biofuel.yaml",
                 "techs/supply/hydro.yaml",
                 "techs/supply/load-shedding.yaml",
                 "techs/supply/open-field-solar-and-wind-onshore.yaml",
@@ -175,22 +165,52 @@ rule model_template:
                 "techs/supply/nuclear.yaml",
             ]
         ),
+        heat_timeseries_data = (
+            "build/models/{resolution}/timeseries/conversion/heat-pump-cop.csv",
+            "build/models/{resolution}/timeseries/supply/historic-electrified-heat.csv",
+        ),
         capacityfactor_timeseries_data = expand(
             "build/models/{{resolution}}/timeseries/supply/capacityfactors-{technology}.csv",
             technology=ALL_CF_TECHNOLOGIES
         ),
-        demand_timeseries_data = (
-            "build/models/{resolution}/timeseries/demand/electricity.csv",
-            "build/models/{resolution}/timeseries/demand/uncontrolled-electrified-road-transport.csv",
-            "build/models/{resolution}/timeseries/demand/uncontrolled-road-transport-historic-electrification.csv",
-            "build/models/{resolution}/timeseries/demand/electrified-heat-demand.csv",
-            "build/models/{resolution}/timeseries/demand/heat-demand-historic-electrification.csv",
+        demand_timeseries_data = expand(
+            "build/models/{{resolution}}/timeseries/demand/{filename}",
+            filename=[
+                "electricity.csv",
+                "uncontrolled-electrified-road-transport.csv",
+                "uncontrolled-road-transport-historic-electrification.csv",
+                "demand-shape-min-ev.csv",
+                "demand-shape-max-ev.csv",
+                "demand-shape-equals-ev.csv",
+                "plugin-profiles-ev.csv",
+                "heat.csv",
+                "electrified-heat.csv",
+            ]
         ),
-        optional_input_files = lambda wildcards: expand(
-            f"build/models/{wildcards.resolution}/{{input_file}}",
-            input_file=[
+        optional_transmission_modules = lambda wildcards: expand(
+            f"build/models/{wildcards.resolution}/{{module}}",
+            module=[
                 "techs/transmission/electricity-linked-neighbours.yaml",
             ] + ["techs/transmission/electricity-entsoe.yaml" for i in [None] if wildcards.resolution == "national"]
+        ),
+        optional_heat_modules = expand(
+            "build/models/{{resolution}}/{module}",
+            module=[
+                "techs/demand/heat.yaml",
+                "techs/demand/electrified-heat.yaml",
+                "techs/storage/heat.yaml",
+                "techs/conversion/heat-from-electricity.yaml",
+                "techs/conversion/heat-from-biofuel.yaml",
+                "techs/supply/historic-electrified-heat.yaml"
+            ]
+        ),
+        optional_biofuel_modules = expand(
+            "build/models/{{resolution}}/{module}",
+            module=[
+                "techs/supply/biofuel.yaml",
+                "techs/supply/electrified-biofuel.yaml",
+                "techs/conversion/electricity-from-biofuel.yaml"
+            ]
         )
     params:
         year = config["scope"]["temporal"]["first-year"]
@@ -226,7 +246,8 @@ rule dag:
         "dot -Tpdf {input} -o build/dag.pdf"
 
 
-rule clean: # removes all generated results
+rule clean:  # removes all generated results
+    localrule: True
     shell:
         """
         rm -r build/
@@ -238,14 +259,20 @@ rule test:
     message: "Run tests"
     input:
         test_dir = model_test_dir,
+        test_resources_dir = resources_test_dir,
         tests = map(str, Path(model_test_dir).glob("**/test_*.py")),
         example_model = "build/models/{resolution}/example-model.yaml",
         capacity_factor_timeseries = expand(
             "build/models/{{resolution}}/timeseries/supply/capacityfactors-{technology}.csv",
             technology=ALL_CF_TECHNOLOGIES
-        )
+        ),
+        electrified_heat_demand = "build/models/{resolution}/timeseries/demand/electrified-heat.csv",
+        heat_demand = "build/models/{resolution}/timeseries/demand/heat.csv",
+        historic_electrified_heat = "build/models/{resolution}/timeseries/supply/historic-electrified-heat.csv",
+        cop = "build/models/{resolution}/timeseries/conversion/heat-pump-cop.csv"
     params:
-        config = config
+        config = config,
+        test_args = []  # add e.g. "--pdb" to enter ipdb on test failure
     log: "build/logs/{resolution}/test-report.html"
     output: "build/logs/{resolution}/test.success"
     conda: "./envs/test.yaml"

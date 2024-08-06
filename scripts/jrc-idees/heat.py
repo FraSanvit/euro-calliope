@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -8,7 +6,7 @@ idx = pd.IndexSlice
 END_USES = {
     "Space heating": "space_heat",
     "Space cooling": "end_use_electricity",
-    "Hot water": "water_heat",
+    "Hot water": "hot_water",
     "Catering": "cooking",
 }
 CARRIER_NAMES = {
@@ -33,7 +31,6 @@ CARRIER_NAMES = {
 def process_jrc_heat_tertiary_sector_data(
     paths_to_national_data: list[str], out_path: str
 ):
-    paths_to_national_data = [Path(p) for p in paths_to_national_data]
     dfs = []
     for file in paths_to_national_data:
         df_final_energy = pd.read_excel(file, sheet_name="SER_hh_fec", index_col=0)
